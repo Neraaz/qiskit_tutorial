@@ -8,6 +8,7 @@ The saved outputs come from one NVIDIA H100 GPU node on Bridges-2.
 
 | # | Notebook | Package | Topics | Documentation |
 |---|---|---|---|---|
+| 00 | [Jupyter kernels from the container](00_Jupyter_Pykernel_from_Container_image.ipynb) | — | Registers the **Python (Qiskit CPU)** and **Python (Qiskit GPU)** kernels for Jupyter/OnDemand; run once | [Apptainer](https://apptainer.org/docs/user/latest/) |
 | 01 | [Quantum computing basics](01_qiskit_quantum_computing_basics.ipynb) | qiskit | Qubits, gates, measurement, entanglement, primitives, transpilation, teleportation, Grover, QFT | [docs](https://quantum.cloud.ibm.com/docs/en/guides) |
 | 02 | [Aer simulation](02_qiskit_aer_simulation.ipynb) | qiskit-aer | Simulation methods, CPU and GPU, noise models, Aer primitives, performance options | [docs](https://qiskit.github.io/qiskit-aer/) |
 | 03 | [Fermions](03_qiskit_fermions.ipynb) | qiskit-fermions, ffsim | Fermionic operators, Jordan–Wigner mapping, Hubbard and H₂ models, UCC/UCJ ansätze | [repo](https://github.com/Qiskit/qiskit-fermions), [ffsim](https://qiskit-community.github.io/ffsim/) |
@@ -23,7 +24,9 @@ The saved outputs come from one NVIDIA H100 GPU node on Bridges-2.
 | 13 | [Readout mitigation (M3)](13_mthree.ipynb) | mthree | Readout calibration, mitigated distributions and expectation values | [docs](https://qiskit.github.io/qiskit-addon-mthree/) |
 | 14 | [Qiskit Experiments](14_qiskit_experiments.ipynb) | qiskit-experiments | T1, T2, randomized benchmarking, tomography, readout characterization | [docs](https://qiskit-community.github.io/qiskit-experiments/) |
 
-Start with 01 if you are new to quantum computing, then 02.
+In Jupyter (e.g. OnDemand), run 00 once with the default **Python 3 (ipykernel)** kernel; it registers the
+**Python (Qiskit CPU)** and **Python (Qiskit GPU)** kernels, which run inside `/ocean/containers/quantum/qiskit.sif`.
+Open the other notebooks with one of those kernels. Start with 01 if you are new to quantum computing, then 02.
 Each notebook lists its sources in the first cell and in a "References" section at the end.
 
 ## Run
