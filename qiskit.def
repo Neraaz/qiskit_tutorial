@@ -1,0 +1,143 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-devel-ubuntu22.04
+
+%labels
+    Author Niraj
+    Description Qiskit 2.x simulation stack with Qiskit Aer built from source for NVIDIA GPUs (CUDA 12.6)
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export PATH=/opt/venv/bin:$PATH
+
+%post
+    set -e
+
+    # System packages: Python, graphviz (circuit drawing), and the Aer build
+    # dependencies OpenBLAS and spdlog. nlohmann-json is built later.
+    export DEBIAN_FRONTEND=noninteractive
+    # apt retries and timeouts, so a slow mirror does not stop the build
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries
+    apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-venv \
+        python3-dev \
+        git \
+        build-essential \
+        ca-certificates \
+        curl \
+        graphviz \
+        libgl1 \
+        libopenblas-dev \
+        libspdlog-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Python virtual environment
+    python3 -m venv /opt/venv
+    . /opt/venv/bin/activate
+
+    pip install --upgrade pip wheel setuptools
+
+    # PyTorch for CUDA 12.6. The default PyPI wheel uses CUDA 13, which does not
+    # support V100 GPUs (sm_70) and does not match the CUDA version of Aer.
+    pip install torch --index-url https://download.pytorch.org/whl/cu126
+
+    # Qiskit packages (simulation only). qiskit-ibm-runtime is installed as a
+    # dependency of qiskit-addon-cutting, qiskit-addon-obp and qiskit-experiments.
+    # It provides the offline fake backends used as noise models.
+    pip install \
+        "qiskit[visualization]" \
+        "qiskit-fermions[ffsim]" \
+        "qiskit-addon-opt-mapper" \
+        "qiskit-addon-aqc-tensor[quimb-jax]" \
+        "qiskit-addon-mpf[dynamic]" \
+        qiskit-algorithms \
+        "qiskit-machine-learning[torch]" \
+        qiskit-addon-utils \
+        qiskit-addon-sqd \
+        qiskit-addon-cutting \
+        qiskit-addon-obp \
+        mthree \
+        qiskit-experiments
+
+    # Scientific and notebook packages
+    pip install numpy scipy matplotlib jupyterlab ipython nlopt
+
+    # Optional optimizers for qiskit-algorithms
+    python -m pip install scikit-quant
+
+    # ---------------------------------------------------------------------------
+    # Qiskit Aer with GPU support, built from source.
+    # The latest qiskit-aer-gpu wheel on PyPI (0.15.1) does not import with Qiskit 2.x.
+    # Build steps follow the Aer CUDA instructions:
+    #   https://github.com/Qiskit/qiskit-aer/blob/main/CONTRIBUTING.md
+    # CUDA libraries and cuQuantum come from pip. GPU targets: V100 (7.0),
+    # A100 (8.0), L40S (8.9), H100 (9.0).
+    # ---------------------------------------------------------------------------
+    AER_VERSION=0.17.2
+    pip install \
+        nvidia-cuda-runtime-cu12 \
+        nvidia-nvjitlink-cu12 \
+        nvidia-cublas-cu12 \
+        nvidia-cusolver-cu12 \
+        nvidia-cusparse-cu12 \
+        "cuquantum-cu12<24.11.0" \
+        "scikit-build>=0.11.0" \
+        "cmake>=3.26,<4" \
+        ninja \
+        "pybind11>2.6,<3"
+
+    # nlohmann-json 3.1.1, the version Aer requires. Newer versions (Ubuntu has 3.10.5)
+    # break noise models: "ValueError: Invalid noise_params JSON: not an object."
+    git clone --depth 1 --branch v3.1.1 https://github.com/nlohmann/json.git /tmp/nlohmann-json
+    cmake -S /tmp/nlohmann-json -B /tmp/nlohmann-json/build -DJSON_BuildTests=OFF -DCMAKE_INSTALL_PREFIX=/usr/local
+    cmake --install /tmp/nlohmann-json/build
+    rm -rf /tmp/nlohmann-json
+
+    git clone --depth 1 --branch ${AER_VERSION} https://github.com/Qiskit/qiskit-aer.git /tmp/qiskit-aer
+    cd /tmp/qiskit-aer
+    export DISABLE_CONAN=ON
+    # Package name "qiskit-aer": packages that depend on qiskit-aer then use this
+    # GPU build, and pip does not install the CPU wheel again.
+    export QISKIT_AER_PACKAGE_NAME=qiskit-aer
+    export QISKIT_AER_CUDA_MAJOR=12
+    export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
+    python setup.py bdist_wheel -- \
+        -DAER_THRUST_BACKEND=CUDA \
+        -DAER_PYTHON_CUDA_ROOT=/opt/venv \
+        -DAER_CUDA_ARCH="7.0 8.0 8.9 9.0" \
+        --
+    # Replace the CPU wheel (installed as a dependency) with the GPU build
+    pip uninstall -y qiskit-aer qiskit-aer-gpu || true
+    pip install --no-deps dist/qiskit_aer-*.whl
+    cd /
+
+    # Set the library search path (rpath) of the Aer modules to the pip CUDA and
+    # cuQuantum libraries. The rpath set by the Aer build loses "$ORIGIN".
+    pip install patchelf
+    SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+    AER_RPATH='$ORIGIN/../../nvidia/cuda_runtime/lib:$ORIGIN/../../nvidia/cublas/lib:$ORIGIN/../../nvidia/cusolver/lib:$ORIGIN/../../nvidia/cusparse/lib:$ORIGIN/../../nvidia/nvjitlink/lib:$ORIGIN/../../cuquantum/lib:$ORIGIN/../../cutensor/lib'
+    for so in ${SITE}/qiskit_aer/backends/*.so; do
+        patchelf --set-rpath "${AER_RPATH}" "$so"
+    done
+    rm -rf /tmp/qiskit-aer
+
+%test
+    . /opt/venv/bin/activate
+    python -c "import qiskit, qiskit_aer; from qiskit_aer import AerSimulator; print('qiskit', qiskit.__version__, '| qiskit-aer (GPU build)', qiskit_aer.__version__, '| devices (compiled in)', AerSimulator().available_devices())"
+    # Check that Aer is the GPU build
+    python -c "from qiskit_aer import AerSimulator; assert 'GPU' in AerSimulator().available_devices(), 'qiskit-aer is not the GPU build'"
+    # Check a noisy simulation (runs on CPU, no GPU needed)
+    python -c "from qiskit import QuantumCircuit; from qiskit_aer import AerSimulator; from qiskit_aer.noise import NoiseModel, depolarizing_error; nm = NoiseModel(); nm.add_all_qubit_quantum_error(depolarizing_error(0.01, 2), ['cx']); qc = QuantumCircuit(2); qc.h(0); qc.cx(0, 1); qc.measure_all(); print('noisy CPU run:', AerSimulator(noise_model=nm).run(qc, shots=1000).result().get_counts())"
+
+%runscript
+    exec python "$@"
+
+%help
+    Qiskit 2.x simulation container. Qiskit Aer is built with CUDA 12.6 for GPUs.
+    Usage:
+      apptainer shell qiskit.sif
+      apptainer run qiskit.sif script.py
+    GPU (--nv makes the host NVIDIA driver available):
+      apptainer exec --nv qiskit.sif python -c "from qiskit_aer import AerSimulator; print(AerSimulator().available_devices())"
